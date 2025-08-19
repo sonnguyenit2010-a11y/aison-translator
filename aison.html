@@ -1,0 +1,225 @@
+﻿<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Aison Translator – PC Bidirectional</title>
+<style>
+  :root{--bg:#0b1220;--card:#131b2e;--txt:#e8eefc;--muted:#9fb2d8;--accent:#6ee7ff;}
+  body{margin:0;background:linear-gradient(180deg,#0b1220,#0a0f1c);font-family:system-ui,Segoe UI,Roboto,Arial;color:var(--txt)}
+  .wrap{max-width:880px;margin:40px auto;padding:24px}
+  .card{background:var(--card);border:1px solid #1e2a44;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.3);padding:20px}
+  h1{margin:0 0 6px;font-size:28px}
+  p.sub{margin:0 0 18px;color:var(--muted)}
+  .row{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px}
+  textarea{flex:1;min-height:110px;background:#0e1627;color:var(--txt);border:1px solid #21365b;border-radius:12px;padding:12px;font-size:15px;resize:vertical}
+  .controls{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}
+  button{background:#1e2a44;color:#eaf3ff;border:1px solid #2b3f66;border-radius:999px;padding:12px 18px;font-weight:600;cursor:pointer}
+  button.primary{background:linear-gradient(135deg,#1d6aff,#00d0ff);border:none;color:#00142a}
+  button.danger{background:#5b1b1b;border-color:#7a2a2a}
+  .badge{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:12px;background:#0e1627;border:1px solid #22365b;color:#cfe2ff}
+  .status{margin-left:auto}
+  .small{font-size:12px;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:800px){.grid{grid-template-columns:1fr}}
+  .note{font-size:13px;color:#bcd0ff}
+  .sep{height:1px;background:#1f2a45;margin:14px 0}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Aison Translator</h1>
+      <p class="sub">Nói tiếng Việt ↔  English. Tự nhận diện, tự dịch, tự đọc ra loa.</p>
+
+      <div class="controls">
+        <button id="btnStart" class="primary">▶ Start</button>
+        <button id="btnStop" class="danger">⏹ Stop</button>
+        <span class="badge">Mic: <strong id="micState">idle</strong></span>
+        <span class="badge status">Status: <strong id="status">ready</strong></span>
+      </div>
+
+      <div class="grid">
+        <div>
+          <label class="small">Nghe / You said</label>
+          <textarea id="heard" placeholder="Ứng dụng sẽ hiển thị nội dung vừa nghe ở đây..." readonly></textarea>
+        </div>
+        <div>
+          <label class="small">Dịch / Translation</label>
+          <textarea id="translated" placeholder="Bản dịch sẽ hiện ở đây..." readonly></textarea>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:12px">
+        <span class="badge">Tự khởi động lại mic: 
+          <input id="autoRestart" type="checkbox" checked style="transform:scale(1.2);margin-left:8px" />
+        </span>
+        <span class="badge">Đọc ra loa (TTS): 
+          <input id="speakOut" type="checkbox" checked style="transform:scale(1.2);margin-left:8px" />
+        </span>
+        <span class="badge">Engine dịch:
+          <select id="engine" style="background:#0e1627;color:#eaf3ff;border:1px solid #22365b;border-radius:8px;padding:6px 10px;margin-left:6px">
+            <option value="libre">LibreTranslate (miễn phí)</option>
+          </select>
+        </span>
+      </div>
+
+      <div class="sep"></div>
+      <p class="note">
+        Tip: nói một câu, đợi 1–2 giây cho bản dịch và giọng đọc. Ứng dụng tự đoán ngôn ngữ: nếu nghe <em>Tiếng Việt</em> → dịch sang <strong>English</strong>, và ngược lại.
+      </p>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // === Kiểm tra hỗ trợ ===
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const synth = window.speechSynthesis;
+  if (!SpeechRecognition) {
+    alert("Trình duyệt cần Google Chrome (hỗ trợ Web Speech API) để nhận giọng nói.");
+  }
+
+  // === DOM ===
+  const btnStart = document.getElementById('btnStart');
+  const btnStop = document.getElementById('btnStop');
+  const micState = document.getElementById('micState');
+  const statusEl = document.getElementById('status');
+  const heard = document.getElementById('heard');
+  const translated = document.getElementById('translated');
+  const autoRestart = document.getElementById('autoRestart');
+  const speakOut = document.getElementById('speakOut');
+  const engineSel = document.getElementById('engine');
+
+  // === Nhận diện tiếng Việt đơn giản (dấu) ===
+  function isVietnamese(text){
+    // Heuristic: có dấu tiếng Việt
+    const viDiacritics = /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i;
+    if (viDiacritics.test(text)) return true;
+    // Nếu toàn ASCII và nhiều từ tiếng Anh phổ biến → coi là EN
+    const enWords = /(the|and|is|are|you|hello|please|thank|okay|good|what|how|why|when|where|can|do)\b/i;
+    if (enWords.test(text)) return false;
+    // fallback: nếu chứa nhiều chữ không dấu nhưng có từ "anh", "em" (vi không dấu)
+    const viAsciiHints = /\b(anh|em|toi|chao|xin|cam on|khong|duoc|la|di|may|ban)\b/i;
+    if (viAsciiHints.test(text)) return true;
+    // Mặc định: coi là EN
+    return false;
+  }
+
+  // === TTS (đọc ra loa) ===
+  function speak(text, lang){
+    if (!speakOut.checked) return;
+    if (!text || !synth) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang; // "vi-VN" hoặc "en-US"
+    // Chọn voice phù hợp nếu có
+    const voices = synth.getVoices();
+    const prefer = voices.find(v => v.lang === lang) || voices.find(v => v.lang.startsWith(lang.split('-')[0]));
+    if (prefer) u.voice = prefer;
+    u.rate = 1.0; u.pitch = 1.0;
+    synth.cancel(); // hủy đọc cũ để tránh chồng
+    synth.speak(u);
+  }
+
+  // === Dịch: dùng LibreTranslate demo (có thể thay endpoint riêng nếu cần) ===
+  async function translate(text, source, target){
+    // source: 'vi' or 'en'; target: opposite
+    // Endpoint public demo (có thể thỉnh thoảng chậm): anh có thể đổi sang server khác khi cần
+    const url = 'https://libretranslate.com/translate';
+    const payload = {
+      q: text, source, target, format: "text"
+    };
+    try {
+      const res = await fetch(url, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error('Translate API error');
+      const data = await res.json();
+      return data.translatedText || '';
+    } catch (e){
+      console.error(e);
+      return '(Lỗi dịch – thử lại hoặc kiểm tra Internet)';
+    }
+  }
+
+  // === Nhận giọng nói liên tục ===
+  let recog, listening=false, endTimer=null;
+
+  function setupRecognition(){
+    recog = new SpeechRecognition();
+    recog.continuous = true;
+    recog.interimResults = true;
+    recog.lang = 'vi-VN'; // ngôn ngữ khởi động (không bắt buộc, ta tự nhận diện nội dung)
+    
+    let partial = '';
+    recog.onstart = () => { listening = true; micState.textContent = 'listening…'; statusEl.textContent = 'listening…'; };
+    recog.onend = () => {
+      listening = false; micState.textContent = 'stopped'; statusEl.textContent = 'stopped';
+      // Tự khởi động lại để "không cần giữ nút"
+      if (autoRestart.checked){
+        clearTimeout(endTimer);
+        endTimer = setTimeout(() => { tryStart(); }, 350);
+      }
+    };
+    recog.onerror = (e) => {
+      statusEl.textContent = 'error: ' + (e.error || 'unknown');
+      // Thử khởi động lại
+      if (autoRestart.checked){
+        clearTimeout(endTimer);
+        endTimer = setTimeout(() => { tryStart(); }, 600);
+      }
+    };
+    recog.onresult = async (evt) => {
+      let finalText = '';
+      for (let i=evt.resultIndex;i<evt.results.length;i++){
+        const r = evt.results[i];
+        if (r.isFinal) finalText += r[0].transcript;
+        else partial = r[0].transcript;
+      }
+      const displayText = (finalText || partial).trim();
+      if (!displayText) return;
+      heard.value = displayText;
+
+      // Khi có câu hoàn chỉnh thì dịch + đọc
+      if (finalText){
+        statusEl.textContent = 'translating…';
+        const vi = isVietnamese(finalText);
+        const source = vi ? 'vi' : 'en';
+        const target = vi ? 'en' : 'vi';
+        const out = await translate(finalText, source, target);
+        translated.value = out;
+        statusEl.textContent = 'speaking…';
+        speak(out, target === 'vi' ? 'vi-VN' : 'en-US');
+        statusEl.textContent = 'listening…';
+      }
+    };
+  }
+
+  async function tryStart(){
+    if (listening) return;
+    if (!recog) setupRecognition();
+    try{
+      recog.start();
+    }catch(e){
+      // đôi khi start khi đang start → ignore
+    }
+  }
+
+  btnStart.onclick = tryStart;
+  btnStop.onclick = () => { if (recog) try{recog.stop();}catch(_){} };
+
+  // Tải voices sớm
+  if (synth) {
+    const preloadVoices = () => { synth.getVoices(); };
+    preloadVoices();
+    if (typeof speechSynthesis !== 'undefined') {
+      speechSynthesis.onvoiceschanged = preloadVoices;
+    }
+  }
+
+})();
+</script>
+</body>
+</html>
